@@ -90,18 +90,20 @@ fastify.post('/tasks/:id/run', { preHandler: fastify.auth([fastify.verifyApiKey]
     return reply.code(404).send({ message: 'Task not found' });
   }
 
-  const runner = spawn('efizion-agent-runner', [task.title, task.description]);
+  // Caminho relativo para o runner
+  const runnerPath = '../efizion-agent-runner';
+  // Use o binário "efizion" do runner (definido no package.json do runner)
+  const runnerCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const runnerArgs = ['--prefix', runnerPath, 'efizion', task.title, task.description];
 
-  runner.stdout.on('data', (data) => {
-    fastify.log.info(`stdout: ${data}`);
-  });
-
-  runner.stderr.on('data', (data) => {
-    fastify.log.error(`stderr: ${data}`);
+  const runner = spawn(runnerCmd, runnerArgs, {
+    cwd: __dirname + '/../', // Garante execução do diretório da API
+    stdio: 'inherit',
+    shell: false,
   });
 
   runner.on('close', (code) => {
-    fastify.log.info(`child process exited with code ${code}`);
+    fastify.log.info(`efizion-agent-runner exited with code ${code}`);
   });
 
   reply.send({ message: 'Task execution started' });
