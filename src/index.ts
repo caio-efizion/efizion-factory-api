@@ -5,7 +5,6 @@ import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import fastifyHealthcheck from 'fastify-healthcheck';
 import fastifyAuth from 'fastify-auth';
-import fastifyApiKey from 'fastify-api-key';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -39,8 +38,15 @@ fastify.register(fastifySwaggerUi, {
 // Register Healthcheck
 fastify.register(fastifyHealthcheck);
 
-// Register API Key Authentication
-fastify.register(fastifyApiKey, { apiKeys: new Set([API_KEY]) });
+
+// Middleware de autenticação manual por x-api-key
+fastify.decorate('verifyApiKey', async function(request: any, reply: any) {
+  const apiKey = request.headers['x-api-key'];
+  if (!apiKey || apiKey !== API_KEY) {
+    reply.code(401).send({ message: 'Invalid or missing API key' });
+    throw new Error('Unauthorized');
+  }
+});
 
 // Define Task type
 type Task = {
@@ -50,7 +56,7 @@ type Task = {
 };
 
 // POST /tasks
-fastify.post('/tasks', { preHandler: fastify.auth([fastify.verifyApiKey]) }, async (request, reply) => {
+fastify.post('/tasks', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
   const { title, description } = request.body as { title: string; description: string };
   const task = await prisma.task.create({
     data: {
@@ -62,13 +68,13 @@ fastify.post('/tasks', { preHandler: fastify.auth([fastify.verifyApiKey]) }, asy
 });
 
 // GET /tasks
-fastify.get('/tasks', { preHandler: fastify.auth([fastify.verifyApiKey]) }, async (request, reply) => {
+fastify.get('/tasks', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
   const tasks = await prisma.task.findMany();
   reply.send(tasks);
 });
 
 // GET /tasks/:id
-fastify.get('/tasks/:id', { preHandler: fastify.auth([fastify.verifyApiKey]) }, async (request, reply) => {
+fastify.get('/tasks/:id', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
   const { id } = request.params as { id: string };
   const task = await prisma.task.findUnique({
     where: { id: parseInt(id, 10) },
@@ -81,7 +87,7 @@ fastify.get('/tasks/:id', { preHandler: fastify.auth([fastify.verifyApiKey]) }, 
 });
 
 // Integrate efizion-agent-runner
-fastify.post('/tasks/:id/run', { preHandler: fastify.auth([fastify.verifyApiKey]) }, async (request, reply) => {
+fastify.post('/tasks/:id/run', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
   const { id } = request.params as { id: string };
   const task = await prisma.task.findUnique({
     where: { id: parseInt(id, 10) },

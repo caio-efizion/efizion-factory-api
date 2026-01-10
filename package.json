@@ -11,14 +11,14 @@
     "test": "jest"
   },
   "dependencies": {
-    "@fastify/api-key": "^2.0.0",
     "@fastify/auth": "^2.0.0",
-    "@fastify/healthcheck": "^2.0.0",
     "@fastify/swagger": "^8.0.0",
     "@fastify/swagger-ui": "^1.0.0",
-    "@prisma/client": "^5.0.0",
+    "@prisma/client": "^6.16.0",
     "dotenv": "^16.0.0",
-    "fastify": "^4.0.0"
+    "fastify": "^4.0.0",
+    "fastify-healthcheck": "^2.0.0",
+    "prisma": "^6.16.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
