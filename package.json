@@ -1,0 +1,33 @@
+{
+  "name": "efizion-factory-api",
+  "version": "1.0.0",
+  "description": "API Fastify para orquestração de agentes Efizion",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "lint": "eslint . --ext .ts",
+    "test": "jest",
+    "coverage": "jest --coverage"
+  },
+  "dependencies": {
+    "@fastify/auth": "^2.0.0",
+    "@fastify/swagger": "^8.0.0",
+    "@fastify/swagger-ui": "^1.0.0",
+    "@prisma/client": "^6.16.0",
+    "dotenv": "^16.0.0",
+    "fastify": "^4.0.0",
+    "fastify-healthcheck": "^2.0.0",
+    "prisma": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.3"
+  }
+}
