@@ -1,3 +1,16 @@
+// GET /tasks/:id/logs — retorna logs/output da tarefa
+fastify.get('/tasks/:id/logs', { preHandler: verifyApiKey }, async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const task = await prisma.task.findUnique({
+    where: { id: parseInt(id, 10) },
+  });
+  if (!task) {
+    return reply.code(404).send({ message: 'Task not found' });
+  }
+  // Retorna logs/output como array de linhas
+  const logs = task.output ? task.output.split('\n') : [];
+  reply.send({ logs, status: task.status, runnerPid: task.runnerPid });
+});
 // ...toda a implementação robusta da API conforme especificação...
 import Fastify from 'fastify';
 import { PrismaClient } from '@prisma/client';
