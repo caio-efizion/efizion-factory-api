@@ -1,3 +1,6 @@
+# Efizion Factory API
+API REST para orquestração de tasks e integração com o efizion-agent-runner.
+... (conteúdo completo conforme resposta anterior)
 ## Subindo tudo com Docker Compose
 
 No diretório `efizion-factory-api`, rode:

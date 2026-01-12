@@ -15,13 +15,7 @@ export interface TaskParams {
 }
 
 // Define a type for the Fastify instance with Prisma and logging
-export interface FastifyInstanceWithPlugins extends FastifyInstance {
-  prisma: PrismaClient;
-  log: {
-    info: (msg: string, obj?: Record<string, unknown>) => void;
-    error: (msg: string, obj?: Record<string, unknown>) => void;
-  };
-}
+// Interface removida, não utilizada
 
 // Define a type for the Fastify request with API key authentication
 export interface FastifyRequestWithAuth extends FastifyRequest {

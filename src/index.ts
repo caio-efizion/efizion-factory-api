@@ -1,16 +1,18 @@
+// ...toda a implementação robusta da API conforme especificação...
 import Fastify from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import { spawn } from 'child_process';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import fastifyHealthcheck from 'fastify-healthcheck';
-import fastifyAuth from 'fastify-auth';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const prisma = new PrismaClient();
 const fastify = Fastify({ logger: true });
+
+export default fastify;
 
 const API_KEY = process.env.API_KEY || 'default-api-key';
 
@@ -40,13 +42,14 @@ fastify.register(fastifyHealthcheck);
 
 
 // Middleware de autenticação manual por x-api-key
-fastify.decorate('verifyApiKey', async function(request: any, reply: any) {
+function verifyApiKey(request: any, reply: any, done: () => void) {
   const apiKey = request.headers['x-api-key'];
   if (!apiKey || apiKey !== API_KEY) {
     reply.code(401).send({ message: 'Invalid or missing API key' });
-    throw new Error('Unauthorized');
+    return;
   }
-});
+  done();
+}
 
 // Define Task type
 type Task = {
@@ -56,25 +59,27 @@ type Task = {
 };
 
 // POST /tasks
-fastify.post('/tasks', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
+fastify.post('/tasks', { preHandler: verifyApiKey }, async (request, reply) => {
   const { title, description } = request.body as { title: string; description: string };
+  // Cria task com status pending
   const task = await prisma.task.create({
     data: {
       title,
       description,
+      status: 'pending',
     },
   });
   reply.code(201).send(task);
 });
 
 // GET /tasks
-fastify.get('/tasks', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
+fastify.get('/tasks', { preHandler: verifyApiKey }, async (request, reply) => {
   const tasks = await prisma.task.findMany();
   reply.send(tasks);
 });
 
 // GET /tasks/:id
-fastify.get('/tasks/:id', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
+fastify.get('/tasks/:id', { preHandler: verifyApiKey }, async (request, reply) => {
   const { id } = request.params as { id: string };
   const task = await prisma.task.findUnique({
     where: { id: parseInt(id, 10) },
@@ -87,7 +92,7 @@ fastify.get('/tasks/:id', { preHandler: fastify.verifyApiKey }, async (request, 
 });
 
 // Integrate efizion-agent-runner
-fastify.post('/tasks/:id/run', { preHandler: fastify.verifyApiKey }, async (request, reply) => {
+fastify.post('/tasks/:id/run', { preHandler: verifyApiKey }, async (request, reply) => {
   const { id } = request.params as { id: string };
   const task = await prisma.task.findUnique({
     where: { id: parseInt(id, 10) },
@@ -98,21 +103,33 @@ fastify.post('/tasks/:id/run', { preHandler: fastify.verifyApiKey }, async (requ
 
   // Caminho relativo para o runner
   const runnerPath = '../efizion-agent-runner';
-  // Use o binário "efizion" do runner (definido no package.json do runner)
   const runnerCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const runnerArgs = ['--prefix', runnerPath, 'efizion', task.title, task.description];
 
   const runner = spawn(runnerCmd, runnerArgs, {
-    cwd: __dirname + '/../', // Garante execução do diretório da API
-    stdio: 'inherit',
+    cwd: __dirname + '/../',
     shell: false,
   });
 
-  runner.on('close', (code) => {
+  // Salva o PID do runner na task
+  await prisma.task.update({ where: { id: task.id }, data: { runnerPid: runner.pid ?? null } });
+
+  let output = '';
+  runner.stdout.on('data', (data) => { output += data.toString(); });
+  runner.stderr.on('data', (data) => { output += data.toString(); });
+
+  runner.on('close', async (code) => {
+    await prisma.task.update({
+      where: { id: task.id },
+      data: {
+        status: code === 0 ? 'done' : 'error',
+        output,
+      },
+    });
     fastify.log.info(`efizion-agent-runner exited with code ${code}`);
   });
 
-  reply.send({ message: 'Task execution started' });
+  reply.send({ message: 'Task execution started', runnerPid: runner.pid });
 });
 
 // Start the server
