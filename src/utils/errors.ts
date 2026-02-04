@@ -22,6 +22,9 @@ export const ErrorCodes = {
   BAD_REQUEST: 'BAD_REQUEST',
   CONFLICT: 'CONFLICT',
   TASK_EXECUTION_ERROR: 'TASK_EXECUTION_ERROR',
+  RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
+  TIMEOUT: 'TIMEOUT',
+  CORS_ERROR: 'CORS_ERROR',
 } as const;
 
 // Helper para formatar erro do Zod
@@ -84,5 +87,16 @@ export const ErrorHandlers = {
   
   conflict: (reply: FastifyReply, message: string) => {
     sendError(reply, 409, ErrorCodes.CONFLICT, message);
+  },
+  
+  rateLimit: (reply: FastifyReply, retryAfter?: string) => {
+    const message = retryAfter 
+      ? `Too many requests. Please try again after ${retryAfter}`
+      : 'Too many requests. Please try again later';
+    sendError(reply, 429, ErrorCodes.RATE_LIMIT_EXCEEDED, message);
+  },
+  
+  timeout: (reply: FastifyReply) => {
+    sendError(reply, 503, ErrorCodes.TIMEOUT, 'Request timeout: tempo limite excedido');
   },
 };

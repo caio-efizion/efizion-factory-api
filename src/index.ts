@@ -4,6 +4,8 @@ import { spawn } from 'child_process';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import fastifyHealthcheck from 'fastify-healthcheck';
+import rateLimit from '@fastify/rate-limit';
+import cors from '@fastify/cors';
 import dotenv from 'dotenv';
 import { 
   createTaskSchema, 
@@ -11,12 +13,16 @@ import {
   CreateTaskInput,
   TaskIdParam 
 } from './schemas/task.schema';
-import { ErrorHandlers } from './utils/errors';
+import { ErrorHandlers, ErrorCodes } from './utils/errors';
 
 dotenv.config();
 
 const prisma = new PrismaClient();
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ 
+  logger: true,
+  connectionTimeout: 10000, // 10 segundos de timeout global
+  requestTimeout: 10000,
+});
 
 export default fastify;
 
@@ -24,6 +30,53 @@ const API_KEY = process.env.API_KEY;
 if (!API_KEY) {
   throw new Error('API_KEY environment variable is required');
 }
+
+// Register Rate Limiting
+const rateMaxRequests = process.env.NODE_ENV === 'test' && process.env.RATE_LIMIT_MAX
+  ? parseInt(process.env.RATE_LIMIT_MAX)
+  : 100;
+
+fastify.register(rateLimit, {
+  max: rateMaxRequests,
+  timeWindow: '1 minute',
+  errorResponseBuilder: (request, context) => {
+    return {
+      error: {
+        code: ErrorCodes.RATE_LIMIT_EXCEEDED,
+        message: `Too many requests. Please try again after ${context.after}`,
+      },
+      timestamp: new Date().toISOString(),
+      path: request.url,
+    };
+  },
+});
+
+// Register CORS
+const allowedOrigins = process.env.CORS_ORIGINS 
+  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+  : ['http://localhost:3000', 'http://localhost:3100'];
+
+fastify.register(cors, {
+  origin: (origin, callback) => {
+    // Permite requisições sem origin (ex: Postman, cURL)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'), false);
+    }
+  },
+  credentials: true,
+});
+
+// Handler global de timeout
+fastify.addHook('onTimeout', async (request, reply) => {
+  ErrorHandlers.timeout(reply);
+});
 
 // Register Swagger
 fastify.register(fastifySwagger, {

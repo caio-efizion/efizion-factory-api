@@ -7,6 +7,10 @@ API REST para orquestração de agentes de IA autônomos que realizam tarefas de
 - [Visão Geral](#visão-geral)
 - [Endpoints da API](#endpoints-da-api)
 - [Autenticação](#autenticação)
+- [Middlewares de Segurança](#middlewares-de-segurança)
+  - [Rate Limiting](#rate-limiting)
+  - [CORS](#cors)
+  - [Timeout Global](#timeout-global)
 - [Exemplos de Requisições](#exemplos-de-requisições)
 - [Formato de Erros](#formato-de-erros)
 - [Configuração](#configuração)
@@ -67,7 +71,147 @@ x-api-key: sua-chave-api-aqui
 
 **Status Code:** `401 Unauthorized`
 
-## 📍 Endpoints da API
+## �️ Middlewares de Segurança
+
+A API implementa múltiplas camadas de proteção para garantir segurança e estabilidade.
+
+### Rate Limiting
+
+**Proteção contra abuso e ataques de força bruta.**
+
+**Limite:** 100 requisições por minuto por endereço IP
+
+Quando o limite é excedido, a API retorna:
+
+**Status Code:** `429 Too Many Requests`
+
+**Resposta:**
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests. Please try again after 60 seconds"
+  },
+  "timestamp": "2026-02-04T15:30:00.000Z",
+  "path": "/tasks"
+}
+```
+
+**Headers adicionais:**
+- `X-RateLimit-Limit`: Limite máximo de requisições
+- `X-RateLimit-Remaining`: Requisições restantes no período
+- `X-RateLimit-Reset`: Timestamp quando o limite será resetado
+- `Retry-After`: Segundos até poder fazer nova requisição
+
+**Exemplo de uso:**
+```bash
+# Primeira requisição - OK
+curl -H "x-api-key: $API_KEY" http://localhost:3000/tasks
+# Headers: X-RateLimit-Remaining: 99
+
+# Após 100 requisições em 1 minuto
+curl -H "x-api-key: $API_KEY" http://localhost:3000/tasks
+# Status: 429 Too Many Requests
+# Headers: Retry-After: 45
+```
+
+### CORS
+
+**Política de Compartilhamento de Recursos entre Origens.**
+
+A API permite requisições apenas de domínios autorizados, configuráveis via variável de ambiente.
+
+**Configuração:**
+
+Adicione ao `.env`:
+```env
+CORS_ORIGINS=http://localhost:3000,http://localhost:3100,https://app.efizion.com
+```
+
+**Domínios padrão** (se `CORS_ORIGINS` não estiver definido):
+- `http://localhost:3000`
+- `http://localhost:3100`
+
+**Comportamento:**
+- ✅ Requisições de origens permitidas: Aceitas normalmente
+- ✅ Requisições sem origin (cURL, Postman, etc): Sempre permitidas
+- ❌ Requisições de origens não autorizadas: Bloqueadas pelo navegador
+
+**Exemplo de preflight (OPTIONS):**
+```bash
+# Origem permitida
+curl -X OPTIONS http://localhost:3000/tasks \
+  -H "Origin: http://localhost:3100" \
+  -H "Access-Control-Request-Method: GET"
+# Response: 200/204 com headers CORS
+
+# Origem bloqueada
+curl -X OPTIONS http://localhost:3000/tasks \
+  -H "Origin: http://malicious-site.com" \
+  -H "Access-Control-Request-Method: GET"
+# Response: Sem headers Access-Control-Allow-Origin
+```
+
+**Erro no navegador (origem bloqueada):**
+```
+Access to XMLHttpRequest at 'http://localhost:3000/tasks' from origin 
+'http://unauthorized.com' has been blocked by CORS policy: Response to 
+preflight request doesn't pass access control check: No 
+'Access-Control-Allow-Origin' header is present on the requested resource.
+```
+
+### Timeout Global
+
+**Proteção contra requisições lentas e travamentos.**
+
+**Limite:** 10 segundos por requisição
+
+Se qualquer requisição ultrapassar 10 segundos, a API retorna:
+
+**Status Code:** `503 Service Unavailable`
+
+**Resposta:**
+```json
+{
+  "error": {
+    "code": "TIMEOUT",
+    "message": "Request timeout: tempo limite excedido"
+  },
+  "timestamp": "2026-02-04T15:30:10.000Z",
+  "path": "/tasks/123/run"
+}
+```
+
+**Quando ocorre:**
+- Operações de banco de dados muito lentas
+- Execução de tasks que demoram para iniciar
+- Problemas de rede com serviços externos
+- Processamento excessivamente complexo
+
+**Como tratar no cliente:**
+```javascript
+try {
+  const response = await fetch('http://localhost:3000/tasks/1/run', {
+    method: 'POST',
+    headers: { 'x-api-key': API_KEY },
+    timeout: 11000, // Timeout do cliente > timeout do servidor
+  });
+  
+  if (response.status === 503) {
+    const error = await response.json();
+    if (error.error.code === 'TIMEOUT') {
+      console.error('Operação demorou mais de 10 segundos');
+      // Implementar retry com backoff exponencial
+    }
+  }
+} catch (error) {
+  console.error('Erro na requisição:', error);
+}
+```
+
+**⚠️ Importante:** Para operações que naturalmente demoram mais de 10 segundos (como execução de tasks), a API inicia o processo em background e retorna imediatamente o PID do runner. Use o endpoint `/tasks/:id/logs` para acompanhar o progresso.
+
+## �📍 Endpoints da API
 
 ### 1. Health Check
 
