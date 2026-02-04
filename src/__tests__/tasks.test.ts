@@ -2,7 +2,8 @@ import { PrismaClient } from '@prisma/client';
 import fastify from '../index';
 
 const prisma = new PrismaClient();
-const API_KEY = process.env.API_KEY || 'suachaveaqui';
+// API_KEY deve estar definida no ambiente de teste
+const API_KEY = process.env.API_KEY || 'test-api-key-for-ci';
 
 describe('Tasks API', () => {
   beforeAll(async () => {

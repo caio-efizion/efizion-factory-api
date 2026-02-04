@@ -6,7 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const client_1 = require("@prisma/client");
 const index_1 = __importDefault(require("../index"));
 const prisma = new client_1.PrismaClient();
-const API_KEY = process.env.API_KEY || 'suachaveaqui';
+// API_KEY deve estar definida no ambiente de teste
+const API_KEY = process.env.API_KEY || 'test-api-key-for-ci';
 describe('Tasks API', () => {
     beforeAll(async () => {
         await prisma.task.deleteMany();

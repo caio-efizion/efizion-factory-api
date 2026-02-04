@@ -3,7 +3,11 @@
 // Constants for the application
 
 // API Key for authentication
-export const API_KEY = process.env.API_KEY || 'default-api-key';
+const envApiKey = process.env.API_KEY;
+if (!envApiKey) {
+  throw new Error('API_KEY environment variable is required');
+}
+export const API_KEY = envApiKey;
 
 // Database connection URL
 export const DATABASE_URL = process.env.DATABASE_URL || 'file:./dev.db';

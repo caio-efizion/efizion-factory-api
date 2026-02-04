@@ -31,7 +31,7 @@ describe('Smoke Test Suite', () => {
             method: 'POST',
             url: '/tasks',
             headers: {
-                'x-api-key': process.env.API_KEY || 'suachaveaqui',
+                'x-api-key': process.env.API_KEY || 'test-api-key-for-ci',
             },
             payload: {
                 title: 'Test Task',
@@ -49,7 +49,7 @@ describe('Smoke Test Suite', () => {
             method: 'GET',
             url: '/tasks',
             headers: {
-                'x-api-key': process.env.API_KEY || 'suachaveaqui',
+                'x-api-key': process.env.API_KEY || 'test-api-key-for-ci',
             },
         });
         expect(response.statusCode).toBe(200);
@@ -62,7 +62,7 @@ describe('Smoke Test Suite', () => {
             method: 'POST',
             url: '/tasks',
             headers: {
-                'x-api-key': process.env.API_KEY || 'suachaveaqui',
+                'x-api-key': process.env.API_KEY || 'test-api-key-for-ci',
             },
             payload: {
                 title: 'Another Task',
@@ -74,7 +74,7 @@ describe('Smoke Test Suite', () => {
             method: 'GET',
             url: `/tasks/${createdTask.id}`,
             headers: {
-                'x-api-key': process.env.API_KEY || 'suachaveaqui',
+                'x-api-key': process.env.API_KEY || 'test-api-key-for-ci',
             },
         });
         expect(response.statusCode).toBe(200);
