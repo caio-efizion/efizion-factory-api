@@ -9,7 +9,8 @@
     "build": "tsc",
     "lint": "eslint . --ext .ts",
     "test": "jest",
-    "coverage": "jest --coverage"
+    "coverage": "jest --coverage",
+    "smoke": "./smoke.sh"
   },
   "dependencies": {
     "@fastify/auth": "^2.0.0",
@@ -27,6 +28,9 @@
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.56.0",
     "jest": "^29.7.0",
     "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
