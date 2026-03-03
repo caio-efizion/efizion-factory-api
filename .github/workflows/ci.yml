@@ -22,6 +22,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      API_KEY: test-api-key-for-ci
+      DATABASE_URL: file:./prisma/ci.db
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +35,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Prepare test database
+        run: npx prisma db push --skip-generate
       - name: Test
         run: npm test
 
