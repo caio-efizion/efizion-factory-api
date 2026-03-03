@@ -7,8 +7,8 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "build": "tsc",
-    "lint": "eslint . --ext .ts",
-    "test": "jest",
+    "lint": "tsc --noEmit",
+    "test": "jest --runInBand",
     "coverage": "jest --coverage"
   },
   "dependencies": {

@@ -460,25 +460,37 @@ fastify.post<{ Params: TaskIdParam }>(
       runner.stderr.on('data', (data) => { output += data.toString(); });
 
       runner.on('close', async (code) => {
-        await prisma.task.update({
-          where: { id: taskId },
-          data: {
-            status: code === 0 ? 'done' : 'error',
-            output,
-          },
-        });
+        try {
+          await prisma.task.update({
+            where: { id: taskId },
+            data: {
+              status: code === 0 ? 'done' : 'error',
+              output,
+            },
+          });
+        } catch (updateError: any) {
+          if (updateError?.code !== 'P2025') {
+            fastify.log.error({ taskId, updateError }, 'Failed to persist runner result');
+          }
+        }
         fastify.log.info({ taskId, exitCode: code }, 'efizion-agent-runner finished');
       });
 
       runner.on('error', async (error) => {
         fastify.log.error({ taskId, error }, 'efizion-agent-runner failed to start');
-        await prisma.task.update({
-          where: { id: taskId },
-          data: {
-            status: 'error',
-            output: `Failed to start runner: ${error.message}`,
-          },
-        });
+        try {
+          await prisma.task.update({
+            where: { id: taskId },
+            data: {
+              status: 'error',
+              output: `Failed to start runner: ${error.message}`,
+            },
+          });
+        } catch (updateError: any) {
+          if (updateError?.code !== 'P2025') {
+            fastify.log.error({ taskId, updateError }, 'Failed to persist runner startup error');
+          }
+        }
       });
 
       reply.send({ 
