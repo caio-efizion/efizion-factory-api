@@ -396,7 +396,7 @@ fastify.post<{ Params: TaskIdParam }>(
       }
 
       // Extrair repo URL da description
-      const repoRegex = /(https:\/\/github\.com\/[\w\-]+\/[\w\-\.]+)/i;
+      const repoRegex = /(https:\/\/github\.com\/[\w-]+\/[\w-.]+)/i;
       const match = task.description?.match(repoRegex);
       
       if (!match) {
