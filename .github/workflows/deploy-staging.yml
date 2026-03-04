@@ -188,10 +188,17 @@ jobs:
           docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile
           docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile
 
-          HTTP_STATUS="$(curl -sS -o /tmp/health_pr_${PR_NUMBER}.json -w '%{http_code}' "${STAGING_URL}/health")"
-          if [ "$HTTP_STATUS" = "200" ]; then
-            SMOKE_STATUS="ok"
-          else
+          HTTP_STATUS="000"
+          for _ in $(seq 1 24); do
+            HTTP_STATUS="$(curl -sS -o /tmp/health_pr_${PR_NUMBER}.json -w '%{http_code}' "${STAGING_URL}/health" || true)"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              SMOKE_STATUS="ok"
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$SMOKE_STATUS" != "ok" ]; then
             SMOKE_STATUS="failed:${HTTP_STATUS}"
           fi
 
