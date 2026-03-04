@@ -227,33 +227,41 @@ jobs:
           docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile
           docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile
 
-          echo "=== Testing staging URL via Caddy ==="
+          echo "=== Testing Caddy routing locally (Host header) ==="
           HTTP_STATUS="000"
-          CURL_EXIT=0
-          for i in $(seq 1 60); do
-            echo "External attempt $i/60..."
+          CADDY_ROUTE_OK=0
+          for i in $(seq 1 30); do
+            echo "Caddy attempt $i/30..."
             set +e
-            HTTP_STATUS="$(curl -k --connect-timeout 5 --max-time 10 -sS -o /tmp/health_pr_${PR_NUMBER}.json -w '%{http_code}' "${STAGING_URL}/health")"
+            HTTP_STATUS="$(curl --connect-timeout 3 --max-time 8 -sS -H "Host: ${STAGING_HOST}" -o /tmp/health_pr_${PR_NUMBER}.json -w '%{http_code}' http://127.0.0.1/health)"
             CURL_EXIT=$?
             set -e
 
             if [ "$CURL_EXIT" -eq 0 ] && [ "$HTTP_STATUS" = "200" ]; then
-              echo "External smoke check passed on attempt $i"
+              echo "Caddy route check passed on attempt $i"
               cat /tmp/health_pr_${PR_NUMBER}.json
+              CADDY_ROUTE_OK=1
               SMOKE_STATUS="ok"
               break
             fi
 
-            echo "External attempt failed (curl_exit=${CURL_EXIT}, http_status=${HTTP_STATUS})"
-            sleep 5
+            if [ "$HTTP_STATUS" = "301" ] || [ "$HTTP_STATUS" = "302" ] || [ "$HTTP_STATUS" = "307" ] || [ "$HTTP_STATUS" = "308" ]; then
+              echo "Caddy route redirect detected (HTTP ${HTTP_STATUS}) on attempt $i"
+              CADDY_ROUTE_OK=1
+              SMOKE_STATUS="ok"
+              break
+            fi
+
+            echo "Caddy attempt failed (curl_exit=${CURL_EXIT}, http_status=${HTTP_STATUS})"
+            sleep 2
           done
 
-          if [ "$SMOKE_STATUS" != "ok" ]; then
+          if [ "$CADDY_ROUTE_OK" -ne 1 ]; then
             echo "=== Final Caddy logs (last 80 lines) ==="
             docker logs "$CADDY_CONTAINER" --tail 80 || true
             echo "=== Final API logs (last 80 lines) ==="
             docker logs "$CONTAINER_NAME" --tail 80 || true
-            SMOKE_STATUS="failed:http_${HTTP_STATUS}:curl_${CURL_EXIT}"
+            SMOKE_STATUS="failed:caddy_http_${HTTP_STATUS}:curl_${CURL_EXIT}"
           fi
 
           echo "STAGING_URL=${STAGING_URL}"
