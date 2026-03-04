@@ -78,8 +78,17 @@ jobs:
             STAGING_DATABASE_URL_B64="$(printf '%s' "$STAGING_DATABASE_URL" | base64 -w0)"
           fi
 
-          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            "PR_NUMBER='$PR_NUMBER' PR_SHA='$PR_SHA' ACTION_MODE='$ACTION_MODE' STAGING_HOST='$STAGING_HOST' APP_DIR='$APP_DIR' CONTAINER_NAME='$CONTAINER_NAME' REPO_URL='$REPO_URL' CADDYFILE_PATH='$CADDYFILE_PATH' CADDY_CONTAINER='$CADDY_CONTAINER' CADDY_NETWORK='$CADDY_NETWORK' STAGING_API_KEY_B64='$STAGING_API_KEY_B64' STAGING_DATABASE_URL_B64='$STAGING_DATABASE_URL_B64' bash -s" <<'REMOTE_SCRIPT' | tee /tmp/staging_remote_output.txt
+          REMOTE_EXIT=1
+          for attempt in $(seq 1 6); do
+            echo "SSH attempt ${attempt}/6"
+            set +e
+            ssh -i ~/.ssh/id_ed25519 \
+              -o StrictHostKeyChecking=yes \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ConnectionAttempts=1 \
+              -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+              "PR_NUMBER='$PR_NUMBER' PR_SHA='$PR_SHA' ACTION_MODE='$ACTION_MODE' STAGING_HOST='$STAGING_HOST' APP_DIR='$APP_DIR' CONTAINER_NAME='$CONTAINER_NAME' REPO_URL='$REPO_URL' CADDYFILE_PATH='$CADDYFILE_PATH' CADDY_CONTAINER='$CADDY_CONTAINER' CADDY_NETWORK='$CADDY_NETWORK' STAGING_API_KEY_B64='$STAGING_API_KEY_B64' STAGING_DATABASE_URL_B64='$STAGING_DATABASE_URL_B64' bash -s" <<'REMOTE_SCRIPT' | tee /tmp/staging_remote_output.txt
           set -euo pipefail
 
           BEGIN_MARKER="# BEGIN EFIZION PR-${PR_NUMBER} API"
@@ -210,6 +219,22 @@ jobs:
             exit 1
           fi
           REMOTE_SCRIPT
+            REMOTE_EXIT=${PIPESTATUS[0]}
+            set -e
+
+            if [ "$REMOTE_EXIT" -eq 0 ]; then
+              break
+            fi
+
+            if [ "$attempt" -lt 6 ]; then
+              sleep 10
+            fi
+          done
+
+          if [ "$REMOTE_EXIT" -ne 0 ]; then
+            echo "Remote SSH command failed after retries."
+            exit "$REMOTE_EXIT"
+          fi
 
           STAGING_URL="$(grep '^STAGING_URL=' /tmp/staging_remote_output.txt | tail -n1 | cut -d= -f2-)"
           SMOKE_STATUS="$(grep '^SMOKE_STATUS=' /tmp/staging_remote_output.txt | tail -n1 | cut -d= -f2-)"
