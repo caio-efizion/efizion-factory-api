@@ -174,9 +174,39 @@ jobs:
           } > "$COMPOSE_FILE"
 
           cd "$APP_DIR"
+          echo "=== Starting containers ==="
           docker compose up -d --build
 
-          docker exec "$CONTAINER_NAME" sh -lc 'wget -qO- http://127.0.0.1:3000/health >/dev/null'
+          echo "=== Waiting 15s for app to be ready ==="
+          sleep 15
+
+          echo "=== Container status ==="
+          docker ps --filter name="$CONTAINER_NAME"
+
+          echo "=== Application logs (last 30 lines) ==="
+          docker logs "$CONTAINER_NAME" --tail 30
+
+          echo "=== Testing health endpoint locally ==="
+          HEALTH_OK=0
+          for i in {1..20}; do
+            echo "Attempt $i/20..."
+            if docker exec "$CONTAINER_NAME" sh -c 'wget -q -O- http://127.0.0.1:3000/health' > /tmp/health_pr_${PR_NUMBER}.json 2>&1; then
+              echo "Health check passed on attempt $i"
+              cat /tmp/health_pr_${PR_NUMBER}.json
+              HEALTH_OK=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            echo "Health check failed after 20 attempts"
+            echo "=== Final container status ==="
+            docker ps --filter name="$CONTAINER_NAME"
+            echo "=== Final logs ==="
+            docker logs "$CONTAINER_NAME" --tail 50
+            exit 1
+          fi
 
           awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
             $0==b {skip=1; next}
