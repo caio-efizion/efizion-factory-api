@@ -1,0 +1,204 @@
+name: Deploy Production API
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      action_mode:
+        description: "deploy or cleanup"
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - cleanup
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  PROD_ROOT: /opt/efizion/prod/api
+  REPO_URL: https://github.com/${{ github.repository }}.git
+  ACTION_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.action_mode || 'deploy' }}
+
+jobs:
+  deploy-prod:
+    runs-on: [self-hosted, api]
+    environment:
+      name: production
+      url: https://api.efizion.com.br/health
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set production variables
+        id: vars
+        shell: bash
+        run: |
+          PROD_DIR="${{ env.PROD_ROOT }}"
+          PROD_HOST="api.efizion.com.br"
+          CONTAINER="efizion-api-prod"
+          echo "prod_dir=$PROD_DIR" >> "$GITHUB_OUTPUT"
+          echo "prod_host=$PROD_HOST" >> "$GITHUB_OUTPUT"
+          echo "container=$CONTAINER" >> "$GITHUB_OUTPUT"
+          echo "smoke_path=/health" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy or cleanup production
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROD_DIR="${{ steps.vars.outputs.prod_dir }}"
+          PROD_HOST="${{ steps.vars.outputs.prod_host }}"
+          CONTAINER="${{ steps.vars.outputs.container }}"
+          SMOKE_PATH="${{ steps.vars.outputs.smoke_path }}"
+
+          mkdir -p "$PROD_DIR"
+
+          if [ -d "$PROD_DIR/src/.git" ]; then
+            cd "$PROD_DIR/src"
+            git fetch --all --prune
+            git checkout --force main
+            git pull --rebase origin main
+          else
+            git clone "$REPO_URL" "$PROD_DIR/src"
+            cd "$PROD_DIR/src"
+            git checkout --force main
+          fi
+
+          if [ "$ACTION_MODE" = "cleanup" ]; then
+            if [ -f "$PROD_DIR/docker-compose.yml" ]; then
+              cd "$PROD_DIR"
+              docker compose down --remove-orphans || true
+            fi
+            echo "status=cleanup_ok" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -f "$PROD_DIR/docker-compose.yml" ]; then
+            cp "$PROD_DIR/docker-compose.yml" "$PROD_DIR/docker-compose.yml.backup-$(date +%s)"
+          fi
+
+          if [ ! -f "$PROD_DIR/docker-compose.yml" ]; then
+            {
+              echo "services:"
+              echo "  api:"
+              echo "    build:"
+              echo "      context: ./src"
+              echo "    container_name: ${CONTAINER}"
+              echo "    restart: unless-stopped"
+              echo "    env_file:"
+              echo "      - ./.env"
+              echo "    ports:"
+              echo "      - \"127.0.0.1:3000:3000\""
+              echo "    networks:"
+              echo "      - projeto-demo_efizion-net"
+              echo ""
+              echo "networks:"
+              echo "  projeto-demo_efizion-net:"
+              echo "    external: true"
+            } > "$PROD_DIR/docker-compose.yml"
+          fi
+
+          cd "$PROD_DIR"
+          echo "=== Starting production containers ==="
+          docker compose up -d --build
+
+          echo "=== Waiting 15s for app to be ready ==="
+          sleep 15
+
+          echo "=== Local smoke test ==="
+          LOCAL_OK=0
+          for i in {1..20}; do
+            echo "Local attempt $i/20..."
+            if docker exec "$CONTAINER" sh -c "wget -q -O- http://127.0.0.1:3000${SMOKE_PATH}" > /tmp/prod_api_local.json 2>&1; then
+              cat /tmp/prod_api_local.json
+              LOCAL_OK=1
+              break
+            fi
+            sleep 3
+          done
+
+          if [ "$LOCAL_OK" -ne 1 ]; then
+            echo "=== Local smoke failed ==="
+            docker ps --filter name="$CONTAINER"
+            docker logs "$CONTAINER" --tail 100 || true
+            echo "status=failed:local" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "=== External smoke test ==="
+          EXTERNAL_OK=0
+          for i in {1..20}; do
+            echo "External attempt $i/20..."
+            if curl -f -s "https://${PROD_HOST}${SMOKE_PATH}" > /tmp/prod_api_external.json 2>&1; then
+              cat /tmp/prod_api_external.json
+              EXTERNAL_OK=1
+              break
+            fi
+            sleep 3
+          done
+
+          if [ "$EXTERNAL_OK" -ne 1 ]; then
+            echo "=== External smoke failed ==="
+            docker logs "$CONTAINER" --tail 100 || true
+            echo "status=failed:external" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "status=deploy_ok" >> "$GITHUB_OUTPUT"
+
+      - name: Comment deployment status
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          DEPLOY_STATUS: ${{ steps.deploy.outputs.status }}
+          PROD_HOST: ${{ steps.vars.outputs.prod_host }}
+          ACTION_MODE: ${{ env.ACTION_MODE }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const mode = process.env.ACTION_MODE || 'deploy';
+            const status = process.env.DEPLOY_STATUS || 'unknown';
+            const prodHost = process.env.PROD_HOST;
+
+            let body;
+            if (mode === 'cleanup') {
+              body = `🧹 **Production cleanup (API)**\n- Status: ${status}\n- Run: ${runUrl}`;
+            } else if (status === 'deploy_ok') {
+              body = `✅ **Production deployment successful (API)**\n- URL: https://${prodHost}/health\n- Run: ${runUrl}`;
+            } else {
+              body = `❌ **Production deployment failed (API)**\n- Status: ${status}\n- Run: ${runUrl}\n- Action required: human review/rollback.`;
+            }
+
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: context.sha
+            });
+
+            if (prs.data.length > 0) {
+              const pr = prs.data[0];
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body
+              });
+            } else {
+              await github.rest.repos.createCommitComment({
+                owner,
+                repo,
+                commit_sha: context.sha,
+                body
+              });
+            }
