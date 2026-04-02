@@ -1,0 +1,339 @@
+name: Deploy Staging API
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number"
+        required: true
+        type: string
+      pr_sha:
+        description: "Commit SHA to deploy"
+        required: false
+        type: string
+      action:
+        description: "deploy or cleanup"
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - cleanup
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      PR_SHA: ${{ github.event.pull_request.head.sha || inputs.pr_sha || github.sha }}
+      ACTION_MODE: ${{ github.event.action == 'closed' && 'cleanup' || inputs.action || 'deploy' }}
+      STAGING_HOST: pr-${{ github.event.pull_request.number || inputs.pr_number }}.api-stg-pr.efizion.com.br
+      APP_DIR: /opt/efizion/staging/api/pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      CONTAINER_NAME: efizion-api-stg-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      REPO_URL: https://github.com/${{ github.repository }}.git
+      CADDYFILE_PATH: /root/caddy/Caddyfile
+      CADDY_CONTAINER: caddy
+      CADDY_NETWORK: projeto-demo_efizion-net
+    steps:
+      - name: Setup SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy or cleanup on VPS
+        id: remote
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          STAGING_API_KEY: ${{ secrets.STAGING_API_KEY }}
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${VPS_HOST:-}" ] || [ -z "${VPS_USER:-}" ] || [ -z "${VPS_PORT:-}" ]; then
+            echo "Missing required VPS secrets (VPS_HOST/VPS_USER/VPS_PORT)."
+            exit 1
+          fi
+
+          STAGING_API_KEY_B64=""
+          STAGING_DATABASE_URL_B64=""
+          if [ -n "${STAGING_API_KEY:-}" ]; then
+            STAGING_API_KEY_B64="$(printf '%s' "$STAGING_API_KEY" | base64 -w0)"
+          fi
+          if [ -n "${STAGING_DATABASE_URL:-}" ]; then
+            STAGING_DATABASE_URL_B64="$(printf '%s' "$STAGING_DATABASE_URL" | base64 -w0)"
+          fi
+
+          REMOTE_EXIT=1
+          for attempt in $(seq 1 6); do
+            echo "SSH attempt ${attempt}/6"
+            set +e
+            ssh -i ~/.ssh/id_ed25519 \
+              -o StrictHostKeyChecking=yes \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ConnectionAttempts=1 \
+              -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+              "PR_NUMBER='$PR_NUMBER' PR_SHA='$PR_SHA' ACTION_MODE='$ACTION_MODE' STAGING_HOST='$STAGING_HOST' APP_DIR='$APP_DIR' CONTAINER_NAME='$CONTAINER_NAME' REPO_URL='$REPO_URL' CADDYFILE_PATH='$CADDYFILE_PATH' CADDY_CONTAINER='$CADDY_CONTAINER' CADDY_NETWORK='$CADDY_NETWORK' STAGING_API_KEY_B64='$STAGING_API_KEY_B64' STAGING_DATABASE_URL_B64='$STAGING_DATABASE_URL_B64' bash -s" <<'REMOTE_SCRIPT' | tee /tmp/staging_remote_output.txt
+          set -euo pipefail
+
+          BEGIN_MARKER="# BEGIN EFIZION PR-${PR_NUMBER} API"
+          END_MARKER="# END EFIZION PR-${PR_NUMBER} API"
+          COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
+          ENV_FILE="${APP_DIR}/.env"
+          STAGING_URL="https://${STAGING_HOST}"
+          SMOKE_STATUS="not-run"
+
+          if docker network inspect "$CADDY_NETWORK" >/dev/null 2>&1; then
+            docker network connect "$CADDY_NETWORK" "$CADDY_CONTAINER" >/dev/null 2>&1 || true
+          fi
+
+          if [ "$ACTION_MODE" = "cleanup" ]; then
+            if [ -f "$COMPOSE_FILE" ]; then
+              cd "$APP_DIR"
+              docker compose down --remove-orphans || true
+            fi
+
+            if [ -f "$CADDYFILE_PATH" ]; then
+              awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+                $0==b {skip=1; next}
+                $0==e {skip=0; next}
+                skip!=1 {print}
+              ' "$CADDYFILE_PATH" > "${CADDYFILE_PATH}.tmp"
+              mv "${CADDYFILE_PATH}.tmp" "$CADDYFILE_PATH"
+              docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile
+              docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile
+            fi
+
+            echo "STAGING_URL=${STAGING_URL}"
+            echo "SMOKE_STATUS=cleanup"
+            echo "ACTION_RESULT=cleanup_ok"
+            exit 0
+          fi
+
+          mkdir -p "$APP_DIR"
+
+          if [ ! -d "${APP_DIR}/src/.git" ]; then
+            git clone "$REPO_URL" "${APP_DIR}/src"
+          fi
+
+          cd "${APP_DIR}/src"
+          git fetch --all --prune
+          git checkout --force "$PR_SHA"
+
+          API_KEY_VALUE=""
+          if [ -n "${STAGING_API_KEY_B64:-}" ]; then
+            API_KEY_VALUE="$(printf '%s' "$STAGING_API_KEY_B64" | base64 -d)"
+          else
+            API_KEY_VALUE="$(openssl rand -hex 32)"
+          fi
+
+          DATABASE_URL_VALUE="postgresql://efizion:efizion@efizion-db:5432/efizion"
+          if [ -n "${STAGING_DATABASE_URL_B64:-}" ]; then
+            DATABASE_URL_VALUE="$(printf '%s' "$STAGING_DATABASE_URL_B64" | base64 -d)"
+          fi
+
+          umask 077
+          {
+            echo "PORT=3000"
+            echo "API_KEY=${API_KEY_VALUE}"
+            echo "DATABASE_URL=${DATABASE_URL_VALUE}"
+            echo "LOG_LEVEL=info"
+            echo "CORS_ORIGINS=${STAGING_URL}"
+          } > "$ENV_FILE"
+
+          {
+            echo "services:"
+            echo "  api:"
+            echo "    build:"
+            echo "      context: ./src"
+            echo "    container_name: ${CONTAINER_NAME}"
+            echo "    restart: unless-stopped"
+            echo "    env_file:"
+            echo "      - ./.env"
+            echo "    networks:"
+            echo "      - ${CADDY_NETWORK}"
+            echo ""
+            echo "networks:"
+            echo "  ${CADDY_NETWORK}:"
+            echo "    external: true"
+          } > "$COMPOSE_FILE"
+
+          cd "$APP_DIR"
+          echo "=== Starting containers ==="
+          docker compose up -d --build
+
+          echo "=== Waiting 15s for app to be ready ==="
+          sleep 15
+
+          echo "=== Container status ==="
+          docker ps --filter name="$CONTAINER_NAME"
+
+          echo "=== Application logs (last 30 lines) ==="
+          docker logs "$CONTAINER_NAME" --tail 30
+
+          echo "=== Testing health endpoint locally ==="
+          HEALTH_OK=0
+          for i in {1..20}; do
+            echo "Attempt $i/20..."
+            if docker exec "$CONTAINER_NAME" sh -c 'wget -q -O- http://127.0.0.1:3000/health' > /tmp/health_pr_${PR_NUMBER}.json 2>&1; then
+              echo "Health check passed on attempt $i"
+              cat /tmp/health_pr_${PR_NUMBER}.json
+              HEALTH_OK=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            echo "Health check failed after 20 attempts"
+            echo "=== Final container status ==="
+            docker ps --filter name="$CONTAINER_NAME"
+            echo "=== Final logs ==="
+            docker logs "$CONTAINER_NAME" --tail 50
+            exit 1
+          fi
+
+          awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+            $0==b {skip=1; next}
+            $0==e {skip=0; next}
+            skip!=1 {print}
+          ' "$CADDYFILE_PATH" > "${CADDYFILE_PATH}.tmp"
+          mv "${CADDYFILE_PATH}.tmp" "$CADDYFILE_PATH"
+
+          {
+            echo ""
+            echo "${BEGIN_MARKER}"
+            echo "${STAGING_HOST} {"
+            echo "    reverse_proxy ${CONTAINER_NAME}:3000"
+            echo "}"
+            echo "${END_MARKER}"
+          } >> "$CADDYFILE_PATH"
+
+          docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile
+          docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile
+
+          echo "=== Testing Caddy routing locally (Host header) ==="
+          HTTP_STATUS="000"
+          CADDY_ROUTE_OK=0
+          for i in $(seq 1 30); do
+            echo "Caddy attempt $i/30..."
+            set +e
+            HTTP_STATUS="$(curl --connect-timeout 3 --max-time 8 -sS -H "Host: ${STAGING_HOST}" -o /tmp/health_pr_${PR_NUMBER}.json -w '%{http_code}' http://127.0.0.1/health)"
+            CURL_EXIT=$?
+            set -e
+
+            if [ "$CURL_EXIT" -eq 0 ] && [ "$HTTP_STATUS" = "200" ]; then
+              echo "Caddy route check passed on attempt $i"
+              cat /tmp/health_pr_${PR_NUMBER}.json
+              CADDY_ROUTE_OK=1
+              SMOKE_STATUS="ok"
+              break
+            fi
+
+            if [ "$HTTP_STATUS" = "301" ] || [ "$HTTP_STATUS" = "302" ] || [ "$HTTP_STATUS" = "307" ] || [ "$HTTP_STATUS" = "308" ]; then
+              echo "Caddy route redirect detected (HTTP ${HTTP_STATUS}) on attempt $i"
+              CADDY_ROUTE_OK=1
+              SMOKE_STATUS="ok"
+              break
+            fi
+
+            echo "Caddy attempt failed (curl_exit=${CURL_EXIT}, http_status=${HTTP_STATUS})"
+            sleep 2
+          done
+
+          if [ "$CADDY_ROUTE_OK" -ne 1 ]; then
+            echo "=== Final Caddy logs (last 80 lines) ==="
+            docker logs "$CADDY_CONTAINER" --tail 80 || true
+            echo "=== Final API logs (last 80 lines) ==="
+            docker logs "$CONTAINER_NAME" --tail 80 || true
+            SMOKE_STATUS="failed:caddy_http_${HTTP_STATUS}:curl_${CURL_EXIT}"
+          fi
+
+          echo "STAGING_URL=${STAGING_URL}"
+          echo "SMOKE_STATUS=${SMOKE_STATUS}"
+          echo "ACTION_RESULT=deploy_ok"
+
+          if [ "$SMOKE_STATUS" != "ok" ]; then
+            exit 1
+          fi
+          REMOTE_SCRIPT
+            REMOTE_EXIT=${PIPESTATUS[0]}
+            set -e
+
+            if [ "$REMOTE_EXIT" -eq 0 ]; then
+              break
+            fi
+
+            if [ "$attempt" -lt 6 ]; then
+              sleep 10
+            fi
+          done
+
+          if [ "$REMOTE_EXIT" -ne 0 ]; then
+            echo "Remote SSH command failed after retries."
+            exit "$REMOTE_EXIT"
+          fi
+
+          STAGING_URL="$(grep '^STAGING_URL=' /tmp/staging_remote_output.txt | tail -n1 | cut -d= -f2-)"
+          SMOKE_STATUS="$(grep '^SMOKE_STATUS=' /tmp/staging_remote_output.txt | tail -n1 | cut -d= -f2-)"
+          ACTION_RESULT="$(grep '^ACTION_RESULT=' /tmp/staging_remote_output.txt | tail -n1 | cut -d= -f2-)"
+
+          echo "staging_url=${STAGING_URL}" >> "$GITHUB_OUTPUT"
+          echo "smoke_status=${SMOKE_STATUS}" >> "$GITHUB_OUTPUT"
+          echo "action_result=${ACTION_RESULT}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR with staging status
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        env:
+          STAGING_URL: ${{ steps.remote.outputs.staging_url }}
+          SMOKE_STATUS: ${{ steps.remote.outputs.smoke_status }}
+          ACTION_RESULT: ${{ steps.remote.outputs.action_result }}
+          ACTION_MODE: ${{ env.ACTION_MODE }}
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const actionMode = process.env.ACTION_MODE || 'deploy';
+            const actionResult = process.env.ACTION_RESULT || 'failed';
+            const stagingUrl = process.env.STAGING_URL || `https://pr-${prNumber}.api-stg-pr.efizion.com.br`;
+            const smokeStatus = process.env.SMOKE_STATUS || 'unknown';
+
+            let body;
+            if (actionMode === 'cleanup') {
+              body = [
+                '🧹 **Staging cleanup (API)**',
+                `- PR: #${prNumber}`,
+                `- URL removida: ${stagingUrl}`,
+                `- Resultado: ${actionResult}`
+              ].join('\n');
+            } else {
+              body = [
+                '🚀 **Staging deploy (API)**',
+                `- PR: #${prNumber}`,
+                `- URL: ${stagingUrl}`,
+                `- Smoke: ${smokeStatus}`,
+                `- Resultado: ${actionResult}`
+              ].join('\n');
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body
+            });

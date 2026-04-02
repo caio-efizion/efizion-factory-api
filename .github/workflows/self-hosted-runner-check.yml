@@ -1,0 +1,21 @@
+name: Self-Hosted Runner Check
+
+on:
+  push:
+    branches:
+      - efizion/api-deploy-staging-workflow
+  workflow_dispatch:
+
+jobs:
+  check-self-hosted:
+    runs-on: [self-hosted, linux, x64, vps, efizion, api]
+    steps:
+      - name: Runner identity
+        run: |
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "RUNNER_ARCH=$RUNNER_ARCH"
+          hostname
+      - name: Docker health
+        run: |
+          docker ps --format 'table {{.Names}}\t{{.Status}}' | head -n 15
